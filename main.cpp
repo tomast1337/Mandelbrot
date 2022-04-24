@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <thread>
+#include <string>
 
 #define FrameRate 60
 #define LOG(x) std::cout << x << std::endl;
@@ -45,45 +46,77 @@ double maptoImaginary(int y, int imageHeight, double minI, double maxI)
     return y * (range / imageHeight) + minI;
 }
 
-void draw(GC gc, Display *display, Window win, int imageWidth, int imageHeight, double minR, double maxR, double minI, double maxI, int max_iterations)
+void drawerThread(int *pixelBuffer, int bufferStart, int bufferEnd, int row, int y)
 {
+    for (int x = bufferStart; x < bufferEnd; x++)
+    {
+        double cr = mapToReal(x, imageWidth, minR, maxR);
+        double ci = maptoImaginary(y, imageHeight, minI, maxI);
+        int n = calcMandelbrot(cr, ci, maxN); // calcula numero de interações na funcao calcMandelbrot
+        int r, g, b;
+        if (color == 1) // se for colorido
+        {
+            r = (((n * randR)) % 256);
+            g = ((n * randG) % 256);
+            b = ((n * randB) % 256);
+        }
+        else if (color == 2) // se for preto e branco
+        {
+            r = (n % 256);
+            g = (n % 256);
+            b = (n % 256);
+        }
+        pixelBuffer[x + row * imageWidth] = (r << 16) | (g << 8) | b;
+    }
+}
 
+void draw2file(int *pixelBuffer)
+{
     std::ofstream fout("mandelbrot.ppm");                  // arquivo imagem final gerado (.ppm)
     fout << "P3" << std::endl;                             // magic number do arquivo (indica ppm)
     fout << imageWidth << " " << imageHeight << std::endl; // resolucao
     fout << "256" << std::endl;                            // valor maximo do rgb
-
-    for (int y = 0; y < imageHeight; y++)
+    for (int i = 0; i < imageHeight * imageWidth; i++)
     {
-        for (int x = 0; x < imageWidth; x++)
-        {
-            double cr = mapToReal(x, imageWidth, minR, maxR);       // calcula valor real e imaginario que
-            double ci = maptoImaginary(y, imageHeight, minI, maxI); // corresponde com o x,y na imagem
-
-            int n = calcMandelbrot(cr, ci, maxN); // calcula numero de interações na funcao calcMandelbrot
-
-            int r, g, b;
-
-            if (color == 1) // se for colorido
-            {
-                r = (((n * randR)) % 256);
-                g = ((n * randG) % 256);
-                b = ((n * randB) % 256);
-            }
-            else if (color == 2) // se for preto e branco
-            {
-                r = (n % 256);
-                g = (n % 256);
-                b = (n % 256);
-            }
-            fout << r << " " << g << " " << b << " "; // faz output da imagem
-            XSetForeground(display, gc, (r << 16) | (g << 8) | b);
-            XDrawPoint(display, win, gc, x, y);
-        }
-        fout << std::endl;
+        int r = (pixelBuffer[i] >> 16) & 0xFF;
+        int g = (pixelBuffer[i] >> 8) & 0xFF;
+        int b = (pixelBuffer[i]) & 0xFF;
+        fout << r << " " << g << " " << b << std::endl;
     }
     fout.close();
     LOG("Finalizado! mandelbrot.ppm adicionado no diretorio atual");
+}
+
+void draw(GC gc, Display *display, Window win, int imageWidth, int imageHeight, double minR, double maxR, double minI, double maxI, int max_iterations)
+{
+
+    int *pixelBuffer = new int[imageWidth * imageHeight]; // buffer de pixels
+    int threadCount = processor_count;                    // numero de threads
+    for (int y = 0; y < imageHeight; y++)
+    {
+        int row = y;
+        int bufferStart = 0;
+        int bufferEnd = imageWidth;
+        std::thread threads[threadCount];
+        for (int i = 0; i < threadCount; i++)
+        {
+            threads[i] = std::thread(drawerThread, pixelBuffer, bufferStart, bufferEnd, row, y);
+            bufferStart = bufferEnd;
+            bufferEnd += imageWidth / threadCount;
+        }
+        for (int i = 0; i < threadCount; i++)
+        {
+            threads[i].join();
+        }
+        // Draw
+        for (int x = 0; x < imageWidth; x++)
+        {
+            XSetForeground(display, gc, pixelBuffer[x + row * imageWidth]);
+            XDrawPoint(display, win, gc, x, y);
+        }
+    }
+
+    draw2file(pixelBuffer);
 }
 
 int initRender()
@@ -104,6 +137,7 @@ int initRender()
     window = XCreateSimpleWindow(display, RootWindow(display, screen), 0, 0, imageWidth, imageHeight, 0, 0, 0);
     XSelectInput(display, window, ExposureMask | KeyPressMask);
     XMapWindow(display, window);
+    XStoreName(display, window, "Mandelbrot");
 
     gc = XCreateGC(display, window, 0, 0);
     XSetForeground(display, gc, 0xffffff);
